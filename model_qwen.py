@@ -19,7 +19,7 @@ def find_multiple(n: int, k: int) -> int:
 
 @dataclass
 class ModelArgs:
-    block_size: int = 2048
+    block_size: int = 8192
     vocab_size: int = 151936
     n_layer: int = 24
     n_head: int = 16
@@ -50,7 +50,7 @@ class ModelArgs:
 
 
 transformer_configs = {
-    "Qwen-1_8B-Chat": dict(n_layer=24, n_head=16, dim=2048),
+    "Qwen-1_8B": dict(n_layer=24, n_head=16, dim=2048),
 }
 
 class KVCache(nn.Module):
@@ -96,13 +96,17 @@ class Transformer(nn.Module):
         for b in self.layers:
             b.attention.kv_cache = KVCache(max_batch_size, max_seq_length, self.config.n_local_heads, head_dim)
 
-        self.freqs_cis = precompute_freqs_cis(self.config.block_size, self.config.dim // self.config.n_head, self.config.rope_base)
+        self.freqs_cis = precompute_freqs_cis_new(self.config.block_size, self.config.dim // self.config.n_head, self.config.rope_base)
         self.causal_mask = torch.tril(torch.ones(self.max_seq_length, self.max_seq_length, dtype=torch.bool))
 
     def forward(self, idx: Tensor, input_pos: Optional[Tensor] = None) -> Tensor:
         assert self.freqs_cis is not None, "Caches must be initialized first"
         mask = self.causal_mask[None, None, input_pos]
-        freqs_cis = self.freqs_cis[input_pos]
+        # freqs_cis = self.freqs_cis[input_pos]
+        [cos, sin] = self.freqs_cis
+        cos = cos[:, input_pos]
+        sin = sin[:, input_pos]
+        freqs_cis = [cos, sin]
         x = self.tok_embeddings(idx)
 
         for i, layer in enumerate(self.layers):
@@ -126,7 +130,10 @@ class TransformerBlock(nn.Module):
 
     def forward(self, x: Tensor, input_pos: Tensor, freqs_cis: Tensor, mask: Tensor) -> Tensor:
         h = x + self.attention(self.attention_norm(x), freqs_cis, mask, input_pos)
-        out = h + self.feed_forward(self.ffn_norm(h))
+        ffn_norm_output = self.ffn_norm(h)
+        ffn_output = self.feed_forward(ffn_norm_output)
+        out = h + ffn_output
+        # out = h + self.feed_forward(self.ffn_norm(h))
         return out
 
 
@@ -164,8 +171,10 @@ class Attention(nn.Module):
         k = k.view(bsz, seqlen, self.n_local_heads, self.head_dim)
         v = v.view(bsz, seqlen, self.n_local_heads, self.head_dim)
 
-        q = apply_rotary_emb(q, freqs_cis)
-        k = apply_rotary_emb(k, freqs_cis)
+        q = apply_rotary_pos_emb(q, freqs_cis)
+        k = apply_rotary_pos_emb(k, freqs_cis)
+        # q = apply_rotary_emb(q, freqs_cis)
+        # k = apply_rotary_emb(k, freqs_cis)
 
         q, k, v = map(lambda x: x.transpose(1, 2), (q, k, v))
 
@@ -190,7 +199,13 @@ class FeedForward(nn.Module):
         self.w2 = nn.Linear(config.intermediate_size, config.dim, bias=False)
 
     def forward(self, x: Tensor) -> Tensor:
-        return self.w2(F.silu(self.w1(x)) * self.w3(x))
+        a1 = self.w1(x)
+        a3 = self.w3(x)
+        a2 = F.silu(a3)
+        intermidate = a1 * a2
+        output = self.w2(intermidate)
+        return output
+        # return self.w2(F.silu(self.w1(x)) * self.w3(x))
 
 
 class RMSNorm(nn.Module):
@@ -215,7 +230,7 @@ def precompute_freqs_cis(
     freqs = torch.outer(t, freqs)
     freqs_cis = torch.polar(torch.ones_like(freqs), freqs)
     cache = torch.stack([freqs_cis.real, freqs_cis.imag], dim=-1)
-    return cache.to(dtype=torch.float16)
+    return cache.to(dtype=torch.float16) # [8192, 64, 2]
 
 
 def apply_rotary_emb(x: Tensor, freqs_cis: Tensor) -> Tensor:
@@ -231,3 +246,48 @@ def apply_rotary_emb(x: Tensor, freqs_cis: Tensor) -> Tensor:
 
     x_out2 = x_out2.flatten(3)
     return x_out2.type_as(x)
+
+
+def precompute_freqs_cis_new(
+    seq_len: int, n_elem: int, base: int = 10000
+) -> Tensor:
+    
+    inv_freq = 1.0 / (base ** (torch.arange(0, n_elem, 2).float() / n_elem))
+
+    seq_len_cached = max(2 * seq_len, 16)
+    seq = torch.arange(seq_len_cached)
+    freqs = torch.outer(seq.type_as(inv_freq), inv_freq)
+
+    emb = torch.cat((freqs, freqs), dim=-1)
+    from einops import rearrange
+
+    emb = rearrange(emb, "n d -> 1 n 1 d")
+
+    cos, sin = emb.cos(), emb.sin() # [1, 16384, 1, 128]
+    return [cos[:, :seq_len], sin[:, :seq_len]]
+
+
+
+def _rotate_half(x):
+    from einops import rearrange
+
+    x = rearrange(x, "... (j d) -> ... j d", j=2)
+    x1, x2 = x.unbind(dim=-2)
+    return torch.cat((-x2, x1), dim=-1)
+
+
+def apply_rotary_pos_emb(t, freqs):
+    """ Apply rotary embedding to the first rotary_dim of the iput
+
+    Arguments:
+      t (tensor(batch_size, seq_len, n_head, head_dim)):
+        the input embedding/hidden states
+      freqs (list[tensor(1, seq_len, 1, rotary_dim), tensor(1, seq_len, 1, rotary_dim)]):
+        the cached cos/sin position embeddings 
+    """
+    rot_dim = freqs[0].shape[-1]
+    cos, sin = freqs
+    t_float = t.float()
+    t_rot, t_pass = t_float[..., :rot_dim], t_float[..., rot_dim:]
+    t_rot = (t_rot * cos) + (_rotate_half(t_rot) * sin)
+    return torch.cat((t_rot, t_pass), dim=-1).type_as(t)

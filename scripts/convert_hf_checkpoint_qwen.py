@@ -21,7 +21,7 @@ from model_qwen import ModelArgs
 @torch.inference_mode()
 def convert_hf_checkpoint(
     *,
-    checkpoint_dir: Path = Path("Qwen-1_8B-Chat"),
+    checkpoint_dir: Path = Path("Qwen-1_8B"),
     model_name: Optional[str] = None,
 ) -> None:
     if model_name is None:
@@ -112,7 +112,7 @@ def convert_hf_checkpoint(
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser(description='Convert HuggingFace checkpoint.')
-    parser.add_argument('--checkpoint_dir', type=Path, default=Path("Qwen-1_8B-Chat"))
+    parser.add_argument('--checkpoint_dir', type=Path, default=Path("Qwen-1_8B"))
     parser.add_argument('--model_name', type=str, default=None)
 
     args = parser.parse_args()
