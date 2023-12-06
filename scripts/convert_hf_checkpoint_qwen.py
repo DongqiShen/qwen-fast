@@ -84,9 +84,9 @@ def convert_hf_checkpoint(
     #     merged_result.update(state_dict)
     # tensors = {}
     for file in sorted(bin_files):
-        with safe_open(file, framework="pt", device=0) as f:  
+        with safe_open(file, framework="pt", device="cpu") as f:  
             for k in f.keys():
-                merged_result[k] = f.get_tensor(k).to(torch.float16)
+                merged_result[k] = f.get_tensor(k).to("cpu").to(torch.float16)
 
     final_result = {}
     for key, value in merged_result.items():

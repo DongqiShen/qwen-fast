@@ -196,7 +196,7 @@ def generate(
     }
     return seq, generate_stats
 
-def encode_tokens(tokenizer, string, bos=True, device='cuda'):
+def encode_tokens(tokenizer, string, bos=True, device='mps'):
     tokens = tokenizer.encode(string)
     if bos:
         tokens = [tokenizer.bos_id()] + tokens
@@ -260,12 +260,12 @@ def main(
     rank = maybe_init_dist()
     use_tp = rank is not None
     if use_tp:
-        torch.cuda.set_device(rank)
+        torch.mps.set_device(rank)
         if rank != 0:
             # only print on rank 0
             print = lambda *args, **kwargs: None
 
-    device = 'cuda:0'
+    device = 'mps'
     # precision = torch.bfloat16
     precision = torch.float16
     is_speculative = draft_checkpoint_path is not None
@@ -280,7 +280,7 @@ def main(
     else:
         draft_model = None
 
-    torch.cuda.synchronize()
+    torch.mps.synchronize()
     print(f"Time to load model: {time.time() - t0:.02f} seconds")
     
     tokenizer = AutoTokenizer.from_pretrained(
@@ -317,7 +317,7 @@ def main(
     start = -1 if compile else 0
 
     for i in range(start, num_samples):
-        torch.cuda.synchronize()
+        torch.mps.synchronize()
         if i >= 0 and interactive:
             prompt = input("What is your prompt? ")
             if is_chat:
@@ -369,7 +369,7 @@ def main(
                 prof.export_chrome_trace(f"{profile}_rank_{rank}.json")
             else:
                 prof.export_chrome_trace(f"{profile}.json")
-        torch.cuda.synchronize()
+        torch.mps.synchronize()
         t = time.perf_counter() - t0
 
         if not interactive:
@@ -389,20 +389,20 @@ def main(
         print(f"Mean Accepted: {sum([idx * i for idx, i in enumerate(counts_aggregated)])/sum(counts_aggregated)}")
 
     print(f"Average tokens/sec: {torch.mean(torch.tensor(aggregate_metrics['tokens_per_sec'])).item():.2f}")
-    print(f"Memory used: {torch.cuda.max_memory_reserved() / 1e9:.02f} GB")
+    # print(f"Memory used: {torch.mps.max_memory_reserved() / 1e9:.02f} GB")
 
 
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser(description='Your CLI description.')
 
-    parser.add_argument('--prompt', type=str, default="<|im_start|>system\n请用二次元可爱语气和我说话<|im_end|>\n<|im_start|>user\n你好呀<|im_end|>\n<|im_start|>assistant\n", help='Input prompt.')
+    parser.add_argument('--prompt', type=str, default="<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n<|im_start|>user\n你好呀<|im_end|>\n<|im_start|>assistant\n", help='Input prompt.')
     parser.add_argument('--interactive', action='store_true', help='Whether to launch in interactive mode')
     parser.add_argument('--num_samples', type=int, default=5, help='Number of samples.')
     parser.add_argument('--max_new_tokens', type=int, default=200, help='Maximum number of new tokens.')
     parser.add_argument('--top_k', type=int, default=200, help='Top-k for sampling.')
     parser.add_argument('--temperature', type=float, default=0.8, help='Temperature for sampling.')
-    parser.add_argument('--checkpoint_path', type=Path, default=Path("/home/dongqi/Workspace/gpt-fast/Qwen-1_8B-Chat/model.pth"), help='Model checkpoint path.')
+    parser.add_argument('--checkpoint_path', type=Path, default=Path("/Users/dongqishen/Workspace/LLM/Qwen-1_8B-Chat/model.pth"), help='Model checkpoint path.')
     parser.add_argument('--compile', action='store_true', help='Whether to compile the model.')
     parser.add_argument('--compile_prefill', action='store_true', help='Whether to compile the prefill (improves prefill perf, but higher compile times)')
     parser.add_argument('--profile', type=Path, default=None, help='Profile path.')
