@@ -1,3 +1,11 @@
+# qwen-fast
+针对**gpt-fast**项目做了一点修改，支持qwen的推理，原始的完整版**README**放在下面。需要注意一下几点
+1. 因为硬件限制(RTX 2080)，我仅针对qwen_1.8b做了测试，在使用**torch.compile**前后，性能提升明显（50 token/s vs 100token/s）是原来的两倍。考虑到千问系列模型的架构是一样的，只需要修改模型的信息，就可以运行。
+2. 为了尽可能和原始代码保存一致，有一些地方的代码写的不是很优雅，特别是模型转换的脚本。
+3. 我没有测试量化方法，理论上应该不会存在问题。
+4. 请使用base模型进行测试。chat版本的模型经过了固定格式的微调，在使用此原始代码进行测试时生成的格式是有问题的，因此不如base模型来得直观。
+5. 由于**tokenizer**不同，我还是通过**transformer**来读取，因此也要安装这个库，不过为了达到原文的教学目的，也不是很要紧。
+---
 # gpt-fast
 Simple and efficient pytorch-native transformer text generation.
 

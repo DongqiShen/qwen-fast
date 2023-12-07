@@ -196,7 +196,7 @@ def generate(
     }
     return seq, generate_stats
 
-def encode_tokens(tokenizer, string, bos=True, device='mps'):
+def encode_tokens(tokenizer, string, bos=True, device='cuda'):
     tokens = tokenizer.encode(string)
     if bos:
         tokens = [tokenizer.bos_id()] + tokens
@@ -260,12 +260,12 @@ def main(
     rank = maybe_init_dist()
     use_tp = rank is not None
     if use_tp:
-        torch.mps.set_device(rank)
+        torch.cuda.set_device(rank)
         if rank != 0:
             # only print on rank 0
             print = lambda *args, **kwargs: None
 
-    device = 'mps'
+    device = 'cuda'
     # precision = torch.bfloat16
     precision = torch.float16
     is_speculative = draft_checkpoint_path is not None
@@ -280,7 +280,7 @@ def main(
     else:
         draft_model = None
 
-    torch.mps.synchronize()
+    torch.cuda.synchronize()
     print(f"Time to load model: {time.time() - t0:.02f} seconds")
     
     tokenizer = AutoTokenizer.from_pretrained(
@@ -317,7 +317,7 @@ def main(
     start = -1 if compile else 0
 
     for i in range(start, num_samples):
-        torch.mps.synchronize()
+        torch.cuda.synchronize()
         if i >= 0 and interactive:
             prompt = input("What is your prompt? ")
             if is_chat:
@@ -369,7 +369,7 @@ def main(
                 prof.export_chrome_trace(f"{profile}_rank_{rank}.json")
             else:
                 prof.export_chrome_trace(f"{profile}.json")
-        torch.mps.synchronize()
+        torch.cuda.synchronize()
         t = time.perf_counter() - t0
 
         if not interactive:
@@ -389,7 +389,7 @@ def main(
         print(f"Mean Accepted: {sum([idx * i for idx, i in enumerate(counts_aggregated)])/sum(counts_aggregated)}")
 
     print(f"Average tokens/sec: {torch.mean(torch.tensor(aggregate_metrics['tokens_per_sec'])).item():.2f}")
-    # print(f"Memory used: {torch.mps.max_memory_reserved() / 1e9:.02f} GB")
+    print(f"Memory used: {torch.cuda.max_memory_reserved() / 1e9:.02f} GB")
 
 
 if __name__ == '__main__':
@@ -404,7 +404,7 @@ if __name__ == '__main__':
     parser.add_argument('--max_new_tokens', type=int, default=200, help='Maximum number of new tokens.')
     parser.add_argument('--top_k', type=int, default=200, help='Top-k for sampling.')
     parser.add_argument('--temperature', type=float, default=0.8, help='Temperature for sampling.')
-    parser.add_argument('--checkpoint_path', type=Path, default=Path("/Users/dongqishen/Workspace/LLM/Qwen-1_8B/model.pth"), help='Model checkpoint path.')
+    parser.add_argument('--checkpoint_path', type=Path, default=Path("/home/dongqi/Workspace/qwen-fast/Qwen-1_8B/model.pth"), help='Model checkpoint path.')
     parser.add_argument('--compile', action='store_true', help='Whether to compile the model.')
     parser.add_argument('--compile_prefill', action='store_true', help='Whether to compile the prefill (improves prefill perf, but higher compile times)')
     parser.add_argument('--profile', type=Path, default=None, help='Profile path.')
@@ -414,5 +414,5 @@ if __name__ == '__main__':
     args = parser.parse_args()
     main(
         args.prompt, args.interactive, args.num_samples, args.max_new_tokens, args.top_k,
-        args.temperature, args.checkpoint_path, False, args.compile_prefill, args.profile, args.draft_checkpoint_path, args.speculate_k
+        args.temperature, args.checkpoint_path, True, args.compile_prefill, args.profile, args.draft_checkpoint_path, args.speculate_k
     )
